@@ -1,0 +1,15 @@
+name = i18n comments
+description = Displays all comments for a node in a language-independent way.
+package = Multilingual - Internationalization
+dependencies[] = comment
+dependencies[] = translation
+dependencies[] = locale
+core = 7.x
+
+files[] = i18n_comments.module
+; Information added by drupal.org packaging script on 2012-07-02
+version = "7.x-1.0-beta1"
+core = "7.x"
+project = "i18n_comments"
+datestamp = "1341269813"
+

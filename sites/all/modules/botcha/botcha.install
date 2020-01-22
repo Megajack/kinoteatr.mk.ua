@@ -1,0 +1,440 @@
+<?php
+
+/**
+ * @file
+ * Install, update and uninstall functions for the BOTCHA module.
+ */
+
+include_once "botcha.module"; // for _botcha_variables()
+
+/**
+ * Implements hook_schema().
+ */
+function botcha_schema() {
+  $schema['botcha_form'] = array(
+    'description' => 'Contains a list of all forms for BOTCHA spam protection.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'The machine name of the form.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'primary key' => array('id'),
+  );
+  $schema['botcha_recipe'] = array(
+    'description' => 'Contains a list of all recipes for BOTCHA spam protection.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'The machine name of the recipe.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'title' => array(
+        'description' => 'The title of the concrete recipe.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'description' => array(
+        'description' => 'The description of the concrete recipe.',
+        'type' => 'text',
+        'size' => 'big',
+        'not null' => FALSE,
+      ),
+      'classname' => array(
+        'description' => 'The name of the class initialized for the concrete recipe.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'primary key' => array('id'),
+  );
+  $schema['botcha_recipebook'] = array(
+    'description' => 'Contains a list of all recipe books for BOTCHA spam protection.',
+    'fields' => array(
+      'id' => array(
+        'description' => 'The machine name of the recipe book.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'title' => array(
+        'description' => 'The title of the concrete recipe book.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'description' => array(
+        'description' => 'The description of the concrete recipe book.',
+        'type' => 'text',
+        'size' => 'big',
+        'not null' => FALSE,
+      ),
+    ),
+    'primary key' => array('id'),
+  );
+  $schema['botcha_recipebook_form'] = array(
+    'description' => 'Contains a list of the relationships between recipe books and forms.',
+    'fields' => array(
+      'rbid' => array(
+        'description' => 'The machine name of the recipe book.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'form_id' => array(
+        'description' => 'The string identificator of the form.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'primary key' => array('form_id'),
+    'indexes' => array(
+      'brf_rbid' => array('rbid'),
+    ),
+    'unique keys' => array(
+      'form_id' => array('form_id'),
+    ),
+    'foreign keys' => array(
+      'brf_recipebook' => array(
+        'table' => 'botcha_recipebook',
+        'columns' => array('rbid' => 'id'),
+      ),
+    ),
+  );
+  $schema['botcha_recipebook_recipe'] = array(
+    'description' => 'Contains a list of the relationships between recipe books and recipes.',
+    'fields' => array(
+      'rbid' => array(
+        'description' => 'The machine name of the recipe book.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+      'recipe_id' => array(
+        'description' => 'The machine name of the recipe.',
+        'type' => 'varchar',
+        'length' => 128,
+        'not null' => TRUE,
+        'default' => '',
+      ),
+    ),
+    'primary key' => array('rbid', 'recipe_id'),
+    'indexes' => array(
+      'brr_rbid' => array('rbid'),
+      'brr_recipe_id' => array('recipe_id'),
+    ),
+    'foreign keys' => array(
+      'brr_recipe' => array(
+        'table' => 'botcha_recipe',
+        'columns' => array('recipe_id' => 'id'),
+      ),
+      'brr_recipebook' => array(
+        'table' => 'botcha_recipebook',
+        'columns' => array('rbid' => 'id'),
+      ),
+    ),
+  );
+  return $schema;
+}
+
+/**
+ * Implements hook_requirements().
+ */
+function botcha_requirements($phase) {
+  $requirements = array();
+  $t = get_t();
+  if ($phase == 'runtime') {
+    // Just clean up -dev variables that were renamed
+    //FIXME: decrement this for release: 1
+    //FIXME: remove the below for release when the above is 0
+    if (variable_get('botcha_form_pass_counter', 0) > 0) {
+      variable_set('botcha_form_passed_counter', variable_get('botcha_form_passed_counter', 0) + variable_get('botcha_form_pass_counter', 0));
+      variable_del('botcha_form_pass_counter');
+    }
+    if (variable_get('botcha_wrong_response_counter', 0) > 0) {
+      variable_set('botcha_form_blocked_counter', variable_get('botcha_form_blocked_counter', 0) + variable_get('botcha_wrong_response_counter', 0));
+      variable_del('botcha_wrong_response_counter');
+    }
+
+    $block_cnt = variable_get('botcha_form_blocked_counter', 0);
+    $build_cnt = variable_get('botcha_form_passed_counter', 0) + $block_cnt;
+    // Show statistic counters in the status report.
+    $requirements['botcha_statistics'] = array(
+      'title' => $t('BOTCHA'),
+      'value' => format_plural(
+        $block_cnt,
+        'Already 1 blocked form submission',
+        'Already @count blocked form submissions'
+      )
+      . ($build_cnt > 0 ? ' ' . $t('(!percent% of total !build_cnt processed)',
+        array('!percent' => sprintf("%0.3f", 100 * $block_cnt / $build_cnt), '!build_cnt' => $build_cnt)) : ''),
+      'severity' => REQUIREMENT_INFO,
+    );
+  }
+  return $requirements;
+}
+
+function _botcha_default_form_ids() {
+  // Some default BOTCHA points.
+  $form_ids = array(
+    'user_pass',
+    'user_login',
+    'user_login_block',
+    'user_register_form',
+    'contact_site_form',
+    'contact_personal_form',
+
+    'forum_node_form',
+  );
+  // Add form_ids of comment forms for all currently known node types too.
+  foreach (node_type_get_names() as $type => $name) {
+    $form_ids[] = 'comment_node_' . $type . '_form';
+  }
+  return $form_ids;
+}
+
+/**
+ * Implements of hook_install().
+ */
+function botcha_install() {
+  $t = get_t();
+  $i18n_variables = variable_get('i18n_variables', '');
+  if (!is_array($i18n_variables)) {
+    $i18n_variables = array();
+  }
+  $i18n_variables = array_merge($i18n_variables, _botcha_variables(TRUE));
+  variable_set('i18n_variables', $i18n_variables);
+  // Be friendly to your users: what to do after install?
+  drupal_set_message($t('You can now <a href="@botcha_admin">configure BOTCHA module</a> for your site.',
+    array('@botcha_admin' => url('admin/config/people/botcha'))), 'status');
+  // Generate unique secret for this site
+  variable_set('botcha_secret', md5(uniqid(mt_rand(), TRUE)));
+  // Ensure statistics variables exist
+  variable_set('botcha_form_passed_counter', variable_get('botcha_form_passed_counter', 0));
+  variable_set('botcha_form_blocked_counter', variable_get('botcha_form_blocked_counter', 0));
+  // DRY: Re-use once written.
+  botcha_update_7100();
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function botcha_uninstall() {
+
+  db_delete('variable')
+  ->condition('name', 'botcha_%', 'LIKE')
+  ->execute();
+  //  foreach (_botcha_variables() as $var) { variable_del($var); }
+
+  $i18n_variables = variable_get('i18n_variables', '');
+  if (is_array($i18n_variables)) {
+    $i18n_variables = array_diff($i18n_variables, _botcha_variables());
+    variable_set('i18n_variables', $i18n_variables);
+  }
+  cache_clear_all('variables', 'cache');
+}
+
+/**
+ * Migrate form configuration for changed form ids in Drupal 7.
+ */
+function botcha_update_7000() {
+  // 'user_register' became 'user_register_form'.
+  db_update('botcha_points')
+    ->fields(array('form_id' => 'user_register_form'))
+    ->condition('form_id', 'user_register')
+    ->execute();
+  // 'contact_mail_page' became 'contact_site_form'.
+  db_update('botcha_points')
+    ->fields(array('form_id' => 'contact_site_form'))
+    ->condition('form_id', 'contact_mail_page')
+    ->execute();
+  // 'contact_mail_user' became 'contact_personal_form'.
+  db_update('botcha_points')
+    ->fields(array('form_id' => 'contact_personal_form'))
+    ->condition('form_id', 'contact_mail_user')
+    ->execute();
+
+  // The D6-style comment_form form_id is split per node type
+  // in D7: comment_node_{type}_form, e.g. comment_node_page_form.
+  // Get the current settings for 'comment_form'.
+  $botcha_point = db_query(
+    "SELECT * FROM {botcha_points} WHERE form_id = :comment_form_id",
+    array(':comment_form_id' => 'comment_form')
+  )->fetchObject();
+  if ($botcha_point !== FALSE) {
+    // Create entries for D7-style node form IDs.
+    $botcha_type = $botcha_point->botcha_type;
+    foreach (node_type_get_names() as $type => $name) {
+      $form_id = 'comment_node_' . $type . '_form';
+      db_insert('botcha_points')
+        ->fields(array(
+          'form_id' => $form_id,
+          'botcha_type' => $botcha_type,
+        ))
+        ->execute();
+    }
+    // Delete outdated entry.
+    db_delete('botcha_points')
+      ->condition('form_id', 'comment_form')
+      ->execute();
+  }
+}
+
+/**
+ * Create flexible relationships between recipe books and recipes and between recipe books and forms.
+ */
+function botcha_update_7100() {
+  // Create new tables.
+  // Not to repeat ourselves we are doing it using schema definition.
+  $schema_definition = botcha_schema();
+  // Tables creation itself.
+  // Checks added to let this to be safely called while installing also.
+  // @see botcha_install()
+  if (!db_table_exists('botcha_form')) {
+    db_create_table('botcha_form', $schema_definition['botcha_form']);
+  }
+  if (!db_table_exists('botcha_recipe')) {
+    db_create_table('botcha_recipe', $schema_definition['botcha_recipe']);
+  }
+  if (!db_table_exists('botcha_recipebook')) {
+    db_create_table('botcha_recipebook', $schema_definition['botcha_recipebook']);
+  }
+  if (!db_table_exists('botcha_recipebook_form')) {
+    db_create_table('botcha_recipebook_form', $schema_definition['botcha_recipebook_form']);
+  }
+  if (!db_table_exists('botcha_recipebook_recipe')) {
+    db_create_table('botcha_recipebook_recipe', $schema_definition['botcha_recipebook_recipe']);
+  }
+  // Fill in botcha_form.
+  $insert = db_insert('botcha_form')->fields(array('id'));
+  $forms = _botcha_default_form_ids();
+  foreach ($forms as $form_id) {
+    $insert->values(array(
+      'id' => $form_id,
+    ))->execute();
+  }
+  // Fill in botcha_recipe.
+  $insert = db_insert('botcha_recipe')->fields(array('id', 'classname', 'title', 'description'));
+  $recipes = array(
+    array(
+      'id' => 'honeypot',
+      'classname' => 'BotchaRecipeHoneypot',
+      'title' => 'Default Honeypot recipe',
+      'description' => 'Recipe which implements Honeypot protection method with default configuration.',
+    ),
+    // @todo Turn it into just a customization of Honeypot recipe (by providing rich configuration UI).
+    array(
+      'id' => 'honeypot2',
+      'classname' => 'BotchaRecipeHoneypot2',
+      'title' => 'Default Honeypot2 recipe',
+      'description' => 'Recipe which implements Honeypot2 protection method with default configuration.',
+    ),
+    array(
+      'id' => 'no_resubmit',
+      'classname' => 'BotchaRecipeNoResubmit',
+      'title' => 'Default NoResubmit recipe',
+      'description' => 'Recipe which implements NoResubmit protection method with default configuration.',
+    ),
+    array(
+      'id' => 'obscure_url',
+      'classname' => 'BotchaRecipeObscureUrl',
+      'title' => 'Default ObscureUrl recipe',
+      'description' => 'Recipe which implements ObscureUrl protection method with default configuration.',
+    ),
+    array(
+      'id' => 'timegate',
+      'classname' => 'BotchaRecipeTimegate',
+      'title' => 'Default Timegate recipe',
+      'description' => 'Recipe which implements Timegate protection method with default configuration.',
+    ),
+  );
+  foreach ($recipes as $recipe) {
+    $insert->values(array(
+      'id' => $recipe['id'],
+      'classname' => $recipe['classname'],
+      'title' => $recipe['title'],
+      'description' => $recipe['description'],
+    ))->execute();
+  }
+  // Fill in botcha_recipebook.
+  $insert = db_insert('botcha_recipebook')->fields(array('id', 'title', 'description'));
+  $recipebooks = array(
+    array(
+      'id' => 'default',
+      'title' => 'Default recipe book',
+      'description' => 'It has no magic meaning, you can modify it as you like.',
+    ),
+  );
+  foreach ($recipebooks as $recipebook) {
+    $insert->values(array(
+      'id' => $recipebook['id'],
+      'title' => $recipebook['title'],
+      'description' => $recipebook['description'],
+    ))->execute();
+  }
+  // Fill in botcha_recipebook_form.
+  $insert = db_insert('botcha_recipebook_form')->fields(array('rbid', 'form_id'));
+  $forms = _botcha_default_form_ids();
+  $recipebook_forms = array();
+  foreach ($forms as $form_id) {
+    $recipebook_forms[] = array(
+      'rbid' => 'default',
+      'form_id' => $form_id,
+    );
+  }
+  foreach ($recipebook_forms as $recipebook_form) {
+    $insert->values(array(
+      'rbid' => $recipebook_form['rbid'],
+      'form_id' => $recipebook_form['form_id'],
+    ))->execute();
+  }
+  // Fill in botcha_recipebook_recipe.
+  $insert = db_insert('botcha_recipebook_recipe')->fields(array('rbid', 'recipe_id'));
+  $recipebook_recipes = array(
+    array(
+      'rbid' => 'default',
+      'recipe_id' => 'honeypot',
+    ),
+    array(
+      'rbid' => 'default',
+      'recipe_id' => 'honeypot2',
+    ),
+    array(
+      'rbid' => 'default',
+      'recipe_id' => 'no_resubmit',
+    ),
+    array(
+      'rbid' => 'default',
+      'recipe_id' => 'obscure_url',
+    ),
+    array(
+      'rbid' => 'default',
+      'recipe_id' => 'timegate',
+    ),
+  );
+  foreach ($recipebook_recipes as $recipebook_recipe) {
+    $insert->values(array(
+      'rbid' => $recipebook_recipe['rbid'],
+      'recipe_id' => $recipebook_recipe['recipe_id'],
+    ))->execute();
+  }
+  // Remove botcha_points table.
+  if (db_table_exists('botcha_points')) {
+    db_drop_table('botcha_points');
+  }
+}

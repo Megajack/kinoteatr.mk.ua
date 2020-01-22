@@ -1,0 +1,285 @@
+<?php
+
+/**
+ * @file
+ * BOTCHA - Spam Prevention
+ * It modifies forms by adding various botcha's.
+ */
+
+module_load_include('inc', 'botcha', 'controller/botcha.controller');
+
+define('BOTCHA_LOG', 'BOTCHA');
+define('BOTCHA_LOGLEVEL', variable_get('botcha_loglevel', 2));
+/** BOTCHA_LOGLEVEL:
+ *  0 - no log
+ *  1 - log blocked/bad submissions only
+ *  2 - also log why blocked
+ *  3 - also log good submissions
+ *  4 - also log when preparing forms
+ *  5 - log extra submission details
+ *  6 - misc development items
+ */
+
+/**
+ * Implements hook_help().
+ */
+function botcha_help($path, $arg) {
+  switch ($path) {
+    case 'admin/help#botcha':
+      $output = '<p>' . t('"BOTCHA" is an acronym for "BOT Computerized Heuristic Analysis". It is a method of protection from automated form submissions by performing analysis of submitted data that determines whether the user is a bot. The BOTCHA module is a tool to fight automated submission by malicious users that utilize automated form submission (e.g. for spamming) of for example comments forms, user registration forms, guestbook forms, etc. BOTCHA inserts elements into the desired forms that will not be shown to normal users. These elements have no impact on humans and require no puzzles to solve, but they are easy enough for automated scripts and spam bots to trip on.') . '</p>';
+// UNUSED
+//      $output .= '<p>' . t('Note that BOTCHA module interacts with page caching (see <a href="!performancesettings">performance settings</a>). Because BOTCHA elements should be unique for each generated form, the caching of the page it appears on is prevented. Make sure that these forms do not appear on too many pages or you will lose much caching efficiency. For example, if you put a BOTCHA on the user login block, which typically appears on each page for anonymous visitors, caching will practically be disabled. The comment submission forms are another example. In this case you should set the "%commentlocation" to "%separatepage" in the comment settings of the relevant <a href="!contenttypes">content types</a> for better caching efficiency.',
+//        array(
+//          '!performancesettings' => url('admin/config/development/performance'),
+//          '%commentlocation' => t('Location of comment submission form'),
+//          '%separatepage' => t('Display on separate page'),
+//          '!contenttypes' => url('admin/structure/types'),
+//        )
+//      ) .'</p>';
+
+//      $output .= '<p>'. t('BOTCHA is a trademark of IVA2K.') .'</p>';
+      return $output;
+    case 'admin/config/people/botcha':
+      $output = '<p>' . t('A BOTCHA protection can be added to virtually each Drupal form. Some default forms are already provided in the form list and more can be added using form internal name.') . '</p>';
+      $output .= '<p>' . t('All existing forms can be easily added and managed when the option "%adminlinks" is enabled.',
+        array('%adminlinks' => t('Add BOTCHA administration links to forms'))) . '</p>';
+      if (module_exists('captcha')) {
+        $output .= '<p>' . t('Other forms will be added automatically based on CAPTCHA settings when the option "%usecaptcha" is enabled.',
+          array('%usecaptcha' => t('Add BOTCHA to forms selected for CAPTCHA'))) . '</p>';
+      }
+      $output .= '<p>' . t('Forms served to users with the "%skipbotcha" <a href="@perm">permission</a> won\'t be protected. Be sure to grant this permission to the trusted users (e.g. site administrators). If you want to test a protected form, be sure to do it as a user without the "%skipbotcha" permission (e.g. as anonymous user).',
+        array('%skipbotcha' => t('skip BOTCHA'), '@perm' => url('admin/people/permissions/list', array('fragment' => 'module-' . 'botcha')))) . '</p>';
+      return $output;
+    // !!+{
+    case 'admin/config/people/botcha/form':
+      $output = t('Select which forms to protect with BOTCHA. You can modify recipe books on <a href="@recipebook_page">Recipe books</a> page.', array('@recipebook_page' => url('admin/config/people/botcha/recipebook')));
+      return $output;
+    // !!+}
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function botcha_menu() {
+  $items = array();
+  // Main configuration page of BOTCHA module.
+  $items['admin/config/people/botcha'] = array(
+    'title' => 'BOTCHA',
+    'description' => 'Administer how and where BOTCHAs are used.',
+    'file' => 'botcha.admin.inc',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('botcha_admin_settings'),
+    'access arguments' => array('administer BOTCHA settings'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+  $items['admin/config/people/botcha/general'] = array(
+    'title' => 'General',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -10,
+  );
+  $items['admin/config/people/botcha/form'] = array(
+    'title' => 'Forms',
+    'description' => 'Administer BOTCHA forms.',
+    'file' => 'botcha.admin.inc',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('botcha_forms_form'),
+    'access arguments' => array('administer BOTCHA settings'),
+    'type' => MENU_LOCAL_TASK,
+  );
+  $items['admin/config/people/botcha/form/add'] = array(
+    'title' => 'Add BOTCHA protection to form',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('botcha_form_form'),
+    'access arguments' => array('administer BOTCHA settings'),
+    'file' => 'botcha.admin.inc',
+    'type' => MENU_LOCAL_ACTION,
+  );
+  $items['admin/config/people/botcha/form/%botcha_form'] = array(
+    'title' => 'BOTCHA form administration',
+    'file' => 'botcha.admin.inc',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('botcha_form_form', 5),
+    'access arguments' => array('administer BOTCHA settings'),
+    'type' => MENU_CALLBACK,
+  );
+  $items['admin/config/people/botcha/form/%botcha_form/edit'] = array(
+    'title' => 'Edit',
+    //'page callback' => 'drupal_get_form',
+    //'page arguments' => array('botcha_recipebook_form', 5),
+    //'access arguments' => array('administer BOTCHA settings'),
+    //'file' => 'botcha.admin.inc',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => 1,
+  );
+  $items['admin/config/people/botcha/form/%botcha_form/delete'] = array(
+    'title' => 'Delete',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('botcha_form_delete_form', 5),
+    'access arguments' => array('administer BOTCHA settings'),
+    'file' => 'botcha.admin.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 4,
+  );
+  // !!+{
+  $items['admin/config/people/botcha/recipebook'] = array(
+    'title' => 'Recipe books',
+    'description' => 'Administer BOTCHA recipe books.',
+    'file' => 'botcha.admin.inc',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('botcha_recipebooks_form'),
+    'access arguments' => array('administer BOTCHA settings'),
+    'type' => MENU_LOCAL_TASK,
+  );
+  $items['admin/config/people/botcha/recipebook/add'] = array(
+    'title' => 'Add recipe book',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('botcha_recipebook_form'),
+    'access arguments' => array('administer BOTCHA settings'),
+    'file' => 'botcha.admin.inc',
+    'type' => MENU_LOCAL_ACTION,
+  );
+  $items['admin/config/people/botcha/recipebook/%botcha_recipebook'] = array(
+    'title callback' => 'botcha_recipebook_title',
+    'title arguments' => array(5),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('botcha_recipebook_form', 5),
+    'access arguments' => array('administer BOTCHA settings'),
+    'file' => 'botcha.admin.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+  $items['admin/config/people/botcha/recipebook/%botcha_recipebook/edit'] = array(
+    'title' => 'Edit',
+    //'page callback' => 'drupal_get_form',
+    //'page arguments' => array('botcha_recipebook_form', 5),
+    //'access arguments' => array('administer BOTCHA settings'),
+    //'file' => 'botcha.admin.inc',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => 1,
+  );
+  $items['admin/config/people/botcha/recipebook/%botcha_recipebook/delete'] = array(
+    'title' => 'Delete',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('botcha_recipebook_delete_form', 5),
+    'access arguments' => array('administer BOTCHA settings'),
+    'file' => 'botcha.admin.inc',
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 4,
+  );
+  // !!+}
+  return $items;
+}
+
+/**
+ * Load an object of form.
+ */
+function botcha_form_load($form_id) {
+  return Botcha::getForm($form_id, FALSE);
+}
+
+/**
+ * Load an object of recipe book.
+ */
+function botcha_recipebook_load($rbid) {
+  return Botcha::getRecipebook($rbid);
+}
+
+/**
+ * Title callback for importers.
+ */
+function botcha_recipebook_title($recipebook) {
+  // @todo botcha.module botcha_recipebook_title Add title handling.
+  //return t('@importer', array('@importer' => $importer->config['name']));
+  return "Edit recipebook \"$recipebook->title\"";
+}
+
+/**
+ * Implements hook_permission().
+ */
+function botcha_permission() {
+  return array(
+    'administer BOTCHA settings' => array(
+      'title' => t('Administer BOTCHA settings'),
+    ),
+    'skip BOTCHA' => array(
+      'title' => t('Skip BOTCHA'),
+      'description' => t('Users with this permission will not be subjected to BOTCHA.'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_theme().
+ */
+function botcha_theme() {
+  return array(
+    'botcha_forms_form_botcha_forms' => array(
+      'render element' => 'form',
+      'file' => 'botcha.admin.inc',
+    ),
+    'botcha_recipebooks_form' => array(
+      'render element' => 'form',
+      'file' => 'botcha.admin.inc',
+    ),
+  );
+}
+
+/**
+ * Implements hook_form_alter().
+ *
+ * This function adds BOTCHA protection to forms for untrusted users if needed and adds
+ * BOTCHA administration links for site administrators if this option is enabled.
+ */
+function botcha_form_alter(&$form, &$form_state, $form_id) {
+  // Get singleton recipe book and apply all applicable recipes to the form.
+  $recipebook = Botcha::getForm($form['form_id']['#value'], FALSE)->getRecipebook();
+  if ($recipebook->isApplicable($form, $form_state)) {
+    $recipebook->apply($form, $form_state);
+  }
+}
+
+function _botcha_variables($i18n = FALSE) {
+  $ret = array(
+//    'botcha_i18n_translatable_name',
+  );
+  if (!$i18n) {
+    $ret += array(
+      'botcha_secret',
+      'botcha_loglevel',
+      'botcha_form_passed_counter',
+      'botcha_form_blocked_counter',
+    );
+  }
+  return $ret;
+}
+
+function _botcha_i18n() {
+  $variables = _botcha_variables(TRUE);
+  $i18n_variables = variable_get('i18n_variables', array());
+  if (in_array($variables[0], $i18n_variables)) {
+    return;
+  }
+  $i18n_variables = array_merge($i18n_variables, $variables);
+  variable_set('i18n_variables', $i18n_variables);
+}
+
+/**
+ * Custom form validation - jump to __botcha_form_validate().
+ * FIXME: Is there a standard way to put #validate handlers in a separate file?
+ */
+function _botcha_form_validate($form, &$form_state) {
+  // FIXME: where does this empty value come from ? happens with comments
+  unset($form_state['values']['']);
+  // Fetch singleton recipe book and handle spam protection.
+  $recipebook = Botcha::getForm($form['form_id']['#value'], FALSE)->getRecipebook();
+  if ($recipebook->isApplicable($form, $form_state)) {
+    if ($recipebook->isSpam($form, $form_state)) {
+      $recipebook->handle('spam', $form, $form_state);
+    }
+    else {
+      $recipebook->handle('success', $form, $form_state);
+    }
+  }
+}
+
+// END
